@@ -16,6 +16,6 @@ Initial public release of the Go SDK for the Muse CLI and Muse Session Protocol.
 
 ### Compatibility and validation
 
-The package compiles for Linux, macOS, and Windows on amd64 and arm64 without cgo or an installed Muse binary. Native echo execution is verified on macOS arm64 and Linux arm64. Real Linux demos cover multiple turns, persisted restart/resume and history readback, cancellation/interruption, permission-mode selection, and process errors. Go 1.24 and 1.26 container race/build/vet checks pass.
+The package compiles for Linux, macOS, and Windows on amd64 and arm64 without cgo or an installed Muse binary. Native echo execution is verified on macOS arm64, Linux arm64, and hosted Linux amd64. Real Linux demos cover multiple turns, persisted restart/resume and history readback, cancellation/interruption, permission-mode selection, and process errors. Go 1.24 and 1.26 container race/build/vet checks pass.
 
-Native model-generated approvals/questions, paid providers, non-text inputs, and induced live delivery gaps remain unverified. Application state reconciliation after replay and Obey integration are outside this release. Windows and amd64 runtime behavior is not certified by cross-compilation. The API may change before v1.
+Native model-generated approvals/questions, paid providers, non-text inputs, and induced live delivery gaps remain unverified. Application state reconciliation after replay and Obey integration are outside this release. Windows and macOS amd64 runtime behavior is not certified by cross-compilation. The API may change before v1.

@@ -10,7 +10,7 @@ Run the Muse coding agent from Go. Stream responses, manage persistent conversat
 
 The SDK wraps an installed Muse binary. Muse owns model access, authentication, workspace policy, and session storage. The Go package owns subprocesses, protocol transport, event routing, and cancellation.
 
-**Status:** initial `v0.1.0` release. Tested with Muse Code **1.4.14** on macOS arm64 and Linux arm64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
+**Status:** initial `v0.1.0` release. Tested with Muse Code **1.4.14** on macOS arm64, Linux arm64, and Linux amd64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
 
 ## Features
 
