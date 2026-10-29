@@ -7,3 +7,5 @@ default:
     @just --list
 
 check: (build::all) (test::all) (lint::all)
+
+mod demo '.justfiles/demos.just'

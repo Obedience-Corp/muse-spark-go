@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os/exec"
+	"strings"
 )
 
 // Event retains the complete raw runtime record for forward compatibility.
@@ -40,25 +40,58 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 			errs <- &Error{Kind: "validation", Message: "options", Err: err}
 			return
 		}
-		args = append(args, "--", prompt)
+		if o.PromptFile != "" && prompt != "" {
+			errs <- &Error{Kind: "validation", Message: "prompt and prompt file are mutually exclusive"}
+			return
+		}
+		if o.PromptFile == "" {
+			args = append(args, "--", prompt)
+		}
 		cmd := c.command(ctx, args...)
+		cmd.Stdin = o.APIKey
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			errs <- err
 			return
 		}
-		cmd.Stderr = io.Discard
+		cmd.Stderr = c.Stderr
 		if err = cmd.Start(); err != nil {
 			errs <- &Error{Kind: "process", Message: "start exec", Err: err}
 			return
 		}
+		// A descendant may retain stdout after the owned process exits. Closing
+		// our read end on cancellation keeps Scan from waiting on that descendant.
+		stopRead := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+		defer stopRead()
 		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 65536), 8<<20)
+		scanner.Buffer(make([]byte, 65536), maxFrameBytes)
+		terminalSeen := false
 		for scanner.Scan() {
 			raw := append([]byte(nil), scanner.Bytes()...)
 			var e Event
 			if err = json.Unmarshal(raw, &e); err != nil {
 				break
+			}
+			if e.Type == "" || len(e.Payload) == 0 {
+				err = fmt.Errorf("missing event type or payload")
+				break
+			}
+			if terminalSeen && isTerminalEvent(e.Type) {
+				err = fmt.Errorf("multiple terminal records")
+				break
+			}
+			if isTerminalEvent(e.Type) {
+				var terminal struct {
+					Value string `json:"terminal"`
+				}
+				if err = json.Unmarshal(e.Payload, &terminal); err != nil {
+					break
+				}
+				if terminal.Value == "" || e.Type != "run.terminal."+terminal.Value {
+					err = fmt.Errorf("inconsistent terminal payload")
+					break
+				}
+				terminalSeen = true
 			}
 			e.Raw = raw
 			select {
@@ -85,6 +118,10 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 			errs <- &Error{Kind: "protocol", Message: "decode exec stream", Err: err}
 			return
 		}
+		if waitErr == nil && !terminalSeen {
+			errs <- &Error{Kind: "protocol", Message: "exec exited without a terminal record"}
+			return
+		}
 		if waitErr != nil {
 			code := -1
 			if ex, ok := waitErr.(*exec.ExitError); ok {
@@ -102,13 +139,16 @@ func (c *Client) RunPromptCtx(ctx context.Context, prompt string, opts *RunOptio
 	result := &Result{}
 	found := false
 	for e := range ev {
-		if e.Type == "run.terminal.completed" || e.Type == "run.terminal.failed" || e.Type == "run.terminal.cancelled" {
+		if isTerminalEvent(e.Type) {
 			var p struct {
 				Text     string `json:"text"`
 				Terminal string `json:"terminal"`
 			}
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
 				return nil, err
+			}
+			if p.Terminal == "" || e.Type != "run.terminal."+p.Terminal {
+				return nil, &Error{Kind: "protocol", Message: "inconsistent terminal payload"}
 			}
 			result.Text = p.Text
 			result.Terminal = p.Terminal
@@ -124,6 +164,9 @@ func (c *Client) RunPromptCtx(ctx context.Context, prompt string, opts *RunOptio
 		}
 	}
 	if err := <-er; err != nil {
+		if found {
+			return result, err
+		}
 		return nil, err
 	}
 	if !found {
@@ -134,3 +177,5 @@ func (c *Client) RunPromptCtx(ctx context.Context, prompt string, opts *RunOptio
 	}
 	return result, nil
 }
+
+func isTerminalEvent(kind string) bool { return strings.HasPrefix(kind, "run.terminal.") }

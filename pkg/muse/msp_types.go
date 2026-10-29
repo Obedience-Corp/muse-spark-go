@@ -1,6 +1,12 @@
 package muse
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"sync"
+	"time"
+)
 
 type ClientInfo struct {
 	Name    string `json:"name"`
@@ -25,6 +31,8 @@ type HostOptions struct {
 	NoSessionLog, TrustWorkspace, DisableSandbox, DisableWrite, DisableShell bool
 	UserInputDialogs                                                         bool
 	ClientInfo                                                               ClientInfo
+	Stderr                                                                   io.Writer
+	DisableRequestUserInput                                                  bool
 }
 
 // Notification is a server event; Params and Raw preserve unknown fields.
@@ -38,13 +46,43 @@ type Request struct {
 	ID, Params json.RawMessage
 	Method     string
 	host       *MSPHost
+	state      *receiptState
 }
 
+type receiptState struct {
+	mu   sync.Mutex
+	sent bool
+}
+
+// Respond sends a presentation receipt with a two-second write deadline.
 func (r Request) Respond(err *Error) error {
-	if err != nil {
-		return r.host.write(map[string]any{"jsonrpc": "2.0", "id": r.ID, "error": map[string]any{"code": err.Code, "message": err.Message}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return r.RespondContext(ctx, err)
+}
+
+// RespondContext acknowledges presentation, never a permission choice. A request
+// can be acknowledged only once, including across copies of Request.
+func (r Request) RespondContext(ctx context.Context, responseErr *Error) error {
+	if r.host == nil || r.state == nil {
+		return &Error{Kind: "validation", Message: "request has no host"}
 	}
-	return r.host.write(map[string]any{"jsonrpc": "2.0", "id": r.ID, "result": map[string]any{}})
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	if r.state.sent {
+		return &Error{Kind: "validation", Message: "request already acknowledged"}
+	}
+	var frame any
+	if responseErr != nil {
+		frame = map[string]any{"jsonrpc": "2.0", "id": r.ID, "error": map[string]any{"code": responseErr.Code, "message": responseErr.Message, "data": responseErr.Data}}
+	} else {
+		frame = map[string]any{"jsonrpc": "2.0", "id": r.ID, "result": map[string]any{}}
+	}
+	if err := r.host.writeContext(ctx, frame); err != nil {
+		return err
+	}
+	r.state.sent = true
+	return nil
 }
 
 type SessionInfo struct {
@@ -65,14 +103,23 @@ type InputPart struct {
 	Text       string `json:"text,omitempty"`
 	MediaType  string `json:"mediaType,omitempty"`
 	Base64Data string `json:"base64Data,omitempty"`
+	Selector   string `json:"selector,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Arguments  string `json:"arguments,omitempty"`
+	UploadID   string `json:"uploadId,omitempty"`
+	Width      *int   `json:"width,omitempty"`
+	Height     *int   `json:"height,omitempty"`
 }
 
 func Text(s string) InputPart { return InputPart{Type: "text", Text: s} }
 
 type TurnResult struct {
-	SessionID string          `json:"sessionId"`
-	TurnID    string          `json:"turnId"`
-	Terminal  string          `json:"terminal"`
-	Error     json.RawMessage `json:"error,omitempty"`
-	Raw       json.RawMessage `json:"-"`
+	SessionID  string          `json:"sessionId"`
+	TurnID     string          `json:"turnId"`
+	Terminal   string          `json:"terminal"`
+	Error      json.RawMessage `json:"error,omitempty"`
+	Raw        json.RawMessage `json:"-"`
+	Usage      json.RawMessage `json:"usage,omitempty"`
+	Reason     string          `json:"reason,omitempty"`
+	ViewCursor string          `json:"viewCursor,omitempty"`
 }

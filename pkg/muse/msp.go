@@ -7,66 +7,63 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const knownFingerprint = "sha256:c94c3d1f2f51e6424074b9ec43eac3eedcf532d3dcd77351ec1383a87d3049c6"
+const maxFrameBytes = 8 << 20
+
+var ErrClosed = errors.New("MSP host closed")
+var ErrOverflow = errors.New("MSP event queue overflow")
+var ErrGap = errors.New("MSP view has a delivery gap")
 
 type rpcMessage struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
+	Version string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Result  json.RawMessage `json:"result"`
+	Error   *struct {
 		Code    int             `json:"code"`
 		Message string          `json:"message"`
 		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
+
+// MSPHost owns one Muse process. Call Close to release it. Public handshake
+// metadata is immutable; calls and subscriptions may be used concurrently.
 type MSPHost struct {
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	stdout        io.ReadCloser
-	writeMu       sync.Mutex
-	mu            sync.Mutex
-	pending       map[string]chan rpcMessage
-	notifications chan Notification
-	requests      chan Request
-	done          chan struct{}
-	processDone   chan struct{}
-	next          atomic.Int64
-	closeOnce     sync.Once
-	failOnce      sync.Once
-	err           error
-	turnWaiters   map[string]chan TurnResult
-	terminals     map[string]TurnResult
-	Initialize    InitializeResult
-	Warnings      []string
+	cmd                           *exec.Cmd
+	stdin                         io.WriteCloser
+	stdout                        io.ReadCloser
+	writer                        chan struct{}
+	mu                            sync.Mutex
+	pending                       map[string]chan rpcMessage
+	subscribers                   map[*Subscription]struct{}
+	notifications                 *Subscription
+	requests                      chan Request
+	done, processDone, readerDone chan struct{}
+	processExited                 chan struct{}
+	processErr                    error
+	next                          atomic.Int64
+	closeOnce, failOnce           sync.Once
+	err                           error
+	Initialize                    InitializeResult
+	Warnings                      []string
 }
 
-// StartMSP starts an owned host. ctx governs startup, not the returned host lifetime.
+// StartMSP uses ctx for startup only. The returned host lives until Close or failure.
 func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) {
-	args := []string{"serve"}
-	for _, v := range []struct{ k, v string }{{"--provider", o.Provider}, {"--model", o.Model}, {"--preset", o.Preset}, {"--sandbox-network", o.SandboxNetwork}} {
-		if v.v != "" {
-			args = append(args, v.k, v.v)
-		}
+	args, err := o.args()
+	if err != nil {
+		return nil, &Error{Kind: "validation", Message: "host options", Err: err}
 	}
-	for _, v := range o.Config {
-		args = append(args, "--config", v)
-	}
-	for _, v := range []struct {
-		k  string
-		on bool
-	}{{"--no-session-log", o.NoSessionLog}, {"--trust-workspace", o.TrustWorkspace}, {"--disable-sandbox", o.DisableSandbox}, {"--disable-write", o.DisableWrite}, {"--disable-shell", o.DisableShell}} {
-		if v.on {
-			args = append(args, v.k)
-		}
-	}
-	if err := ctx.Err(); err != nil {
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(c.BinPath, args...)
@@ -75,25 +72,58 @@ func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) 
 		cmd.Dir = o.WorkingDir
 	}
 	cmd.Env = append(append(cmd.Environ(), c.Env...), o.Env...)
-	cmd.Stderr = io.Discard
+	cmd.Stderr = c.Stderr
+	if o.Stderr != nil {
+		cmd.Stderr = o.Stderr
+	} // nil discards diagnostics; never merges them into protocol stdout.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("msp stdin: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	// An owned pipe lets the reaper run independently of the reader, including
+	// when a child exits with a descendant still holding its stdout descriptor.
+	stdout, childOut, err := os.Pipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, fmt.Errorf("msp stdout: %w", err)
 	}
+	cmd.Stdout = childOut
+	cmd.WaitDelay = time.Second
 	if err = cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = childOut.Close()
 		return nil, &Error{Kind: "process", Message: "start MSP", Err: err}
 	}
-	h := &MSPHost{cmd: cmd, stdin: stdin, stdout: stdout, pending: make(map[string]chan rpcMessage), notifications: make(chan Notification, 512), requests: make(chan Request, 32), done: make(chan struct{}), processDone: make(chan struct{}), turnWaiters: make(map[string]chan TurnResult), terminals: make(map[string]TurnResult)}
+	_ = childOut.Close()
+	h := &MSPHost{cmd: cmd, stdin: stdin, stdout: stdout, writer: make(chan struct{}, 1), pending: make(map[string]chan rpcMessage), subscribers: make(map[*Subscription]struct{}), requests: make(chan Request, 32), done: make(chan struct{}), processDone: make(chan struct{}), readerDone: make(chan struct{}), processExited: make(chan struct{})}
 	go h.readLoop()
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			h.processErr = &Error{Kind: "process", Message: "MSP process exited", ExitCode: cmd.ProcessState.ExitCode(), Err: err}
+		}
+		close(h.processExited)
+		// Allow the reader to consume buffered terminal/response frames first.
+		select {
+		case <-h.readerDone:
+		case <-time.After(100 * time.Millisecond):
+			_ = stdout.Close()
+			<-h.readerDone
+		}
+		if err != nil {
+			h.fail(&Error{Kind: "process", Message: "MSP process exited", ExitCode: cmd.ProcessState.ExitCode(), Err: err})
+		} else {
+			h.fail(io.EOF)
+		}
+		_ = stdout.Close()
+		close(h.processDone)
+	}()
 	if o.ClientInfo.Name == "" {
 		o.ClientInfo.Name = "muse_go_sdk"
 	}
 	if o.ClientInfo.Version == "" {
-		o.ClientInfo.Version = "0.1.0"
+		o.ClientInfo.Version = "0.1.0-dev"
 	}
 	params := map[string]any{"clientInfo": o.ClientInfo, "capabilities": map[string]any{"userInputDialogs": o.UserInputDialogs}}
 	if err = h.Call(ctx, "initialize", params, &h.Initialize); err != nil {
@@ -102,80 +132,125 @@ func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) 
 	}
 	if h.Initialize.Schema.Version != 1 {
 		_ = h.Close(context.Background())
-		return nil, &Error{Kind: "compatibility", Message: fmt.Sprintf("unsupported MSP envelope version %d", h.Initialize.Schema.Version)}
+		return nil, &Error{Kind: "compatibility", Message: fmt.Sprintf("unsupported MSP schema version %d", h.Initialize.Schema.Version)}
 	}
 	if h.Initialize.Schema.Fingerprint != knownFingerprint {
 		h.Warnings = append(h.Warnings, "MSP stable schema fingerprint differs from tested version")
 	}
-	if err = h.Notify("initialized", nil); err != nil {
+	if err = h.NotifyContext(ctx, "initialized", nil); err != nil {
 		_ = h.Close(context.Background())
 		return nil, err
 	}
 	return h, nil
 }
-func (h *MSPHost) PID() int                           { return h.cmd.Process.Pid }
-func (h *MSPHost) Notifications() <-chan Notification { return h.notifications }
-func (h *MSPHost) Requests() <-chan Request           { return h.requests }
-func (h *MSPHost) Done() <-chan struct{}              { return h.done }
-func (h *MSPHost) Err() error                         { h.mu.Lock(); defer h.mu.Unlock(); return h.err }
+func (h *MSPHost) PID() int                 { return h.cmd.Process.Pid }
+func (h *MSPHost) Requests() <-chan Request { return h.requests }
+func (h *MSPHost) Done() <-chan struct{}    { return h.done }
+func (h *MSPHost) Err() error               { h.mu.Lock(); defer h.mu.Unlock(); return h.err }
 func (h *MSPHost) fail(err error) {
-	h.failOnce.Do(func() { h.mu.Lock(); h.err = err; h.mu.Unlock(); close(h.done) })
-}
-func (h *MSPHost) write(v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	h.writeMu.Lock()
-	defer h.writeMu.Unlock()
-	select {
-	case <-h.done:
-		return &Error{Kind: "transport", Message: "host closed", Err: h.Err()}
-	default:
-	}
-	for len(b) > 0 {
-		n, e := h.stdin.Write(b)
-		if e != nil {
-			h.fail(e)
-			return &Error{Kind: "transport", Message: "write MSP", Err: e}
+	h.failOnce.Do(func() {
+		h.mu.Lock()
+		h.err = err
+		for s := range h.subscribers {
+			s.finish(err)
+			delete(h.subscribers, s)
 		}
-		if n == 0 {
-			h.fail(io.ErrShortWrite)
-			return io.ErrShortWrite
-		}
-		b = b[n:]
-	}
-	return nil
+		h.mu.Unlock()
+		close(h.done)
+		_ = h.stdin.Close()
+		_ = h.cmd.Process.Kill()
+	})
 }
 
-// writeContext bounds a blocked pipe write. Cancellation while writing closes
-// the host because the peer may have received a partial request.
+// writeContext serializes complete frames. A timeout waiting for the writer is
+// harmless; a timeout during a write terminates the host (partial-frame ambiguity).
 func (h *MSPHost) writeContext(ctx context.Context, v any) error {
-	result := make(chan error, 1)
-	go func() { result <- h.write(v) }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return &Error{Kind: "validation", Message: "encode MSP frame", Err: err}
+	}
+	if len(b)+1 > maxFrameBytes {
+		return &Error{Kind: "validation", Message: "MSP frame exceeds 8 MiB"}
+	}
 	select {
-	case err := <-result:
+	case h.writer <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.done:
+		return h.Err()
+	}
+	defer func() { <-h.writer }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-h.done:
+		return h.Err()
+	default:
+	}
+	result := make(chan error, 1)
+	go func() {
+		b = append(b, '\n')
+		for len(b) > 0 {
+			n, e := h.stdin.Write(b)
+			if e != nil {
+				result <- e
+				return
+			}
+			if n == 0 {
+				result <- io.ErrShortWrite
+				return
+			}
+			b = b[n:]
+		}
+		result <- nil
+	}()
+	select {
+	case err = <-result:
+		if err != nil {
+			err = &Error{Kind: "transport", Message: "write MSP; outcome may be unknown", Err: err}
+			h.fail(err)
+		}
 		return err
 	case <-ctx.Done():
-		h.fail(&Error{Kind: "transport", Message: "write cancelled; request outcome may be unknown", Err: ctx.Err()})
-		_ = h.cmd.Process.Kill()
-		return ctx.Err()
+		err = &Error{Kind: "transport", Message: "write cancelled; outcome may be unknown", Err: ctx.Err()}
+		h.fail(err)
+		<-result
+		return err
+	case <-h.done:
+		<-result
+		return h.Err()
 	}
 }
+
+// Notify uses a bounded default write deadline. Prefer NotifyContext for explicit control.
 func (h *MSPHost) Notify(method string, params any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return h.NotifyContext(ctx, method, params)
+}
+func (h *MSPHost) NotifyContext(ctx context.Context, method string, params any) error {
+	if method == "" {
+		return &Error{Kind: "validation", Message: "empty method"}
+	}
 	m := map[string]any{"jsonrpc": "2.0", "method": method}
 	if params != nil {
 		m["params"] = params
 	}
-	return h.write(m)
+	return h.writeContext(ctx, m)
 }
 func (h *MSPHost) Call(ctx context.Context, method string, params any, result any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if method == "" {
+		return &Error{Kind: "validation", Message: "empty method"}
+	}
 	id := h.next.Add(1)
-	key := fmt.Sprint(id)
+	key := strconv.FormatInt(id, 10)
 	ch := make(chan rpcMessage, 1)
 	h.mu.Lock()
 	h.pending[key] = ch
@@ -188,41 +263,50 @@ func (h *MSPHost) Call(ctx context.Context, method string, params any, result an
 	if err := h.writeContext(ctx, msg); err != nil {
 		return err
 	}
+	var r rpcMessage
 	select {
+	case r = <-ch:
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-h.done:
-		return &Error{Kind: "transport", Message: "host closed with request pending; outcome may be unknown", Err: h.Err()}
-	case r := <-ch:
-		if r.Error != nil {
-			return &Error{Kind: "remote", Message: r.Error.Message, Code: r.Error.Code, Data: r.Error.Data}
+		// A received reply is authoritative even if EOF immediately follows it.
+		select {
+		case r = <-ch:
+		default:
+			return &Error{Kind: "transport", Message: "host closed with request pending; outcome may be unknown", Err: h.Err()}
 		}
-		if result != nil {
-			if err := json.Unmarshal(r.Result, result); err != nil {
-				return &Error{Kind: "protocol", Message: "decode response", Err: err}
-			}
-		}
-		return nil
 	}
+	if r.Error != nil {
+		return &Error{Kind: "remote", Message: r.Error.Message, Code: r.Error.Code, Data: r.Error.Data}
+	}
+	if result != nil {
+		if err := json.Unmarshal(r.Result, result); err != nil {
+			return &Error{Kind: "protocol", Message: "decode response", Err: err}
+		}
+	}
+	return nil
 }
 func (h *MSPHost) readLoop() {
-	defer close(h.processDone)
-	defer close(h.notifications)
+	defer close(h.readerDone)
 	defer close(h.requests)
 	sc := bufio.NewScanner(h.stdout)
-	sc.Buffer(make([]byte, 65536), 8<<20)
+	sc.Buffer(make([]byte, 65536), maxFrameBytes)
 	for sc.Scan() {
-		raw := append([]byte(nil), sc.Bytes()...)
+		raw := append(json.RawMessage(nil), sc.Bytes()...)
 		var m rpcMessage
-		if err := json.Unmarshal(raw, &m); err != nil {
-			h.fail(&Error{Kind: "protocol", Message: "invalid MSP frame", Err: err})
-			_ = h.cmd.Process.Kill()
-			break
+		err := json.Unmarshal(raw, &m)
+		hasID := len(m.ID) > 0 && string(m.ID) != "null"
+		if err != nil || m.Version != "2.0" || (m.Method == "" && (!hasID || (m.Error == nil) == (len(m.Result) == 0))) || (m.Method != "" && (m.Error != nil || len(m.Result) > 0)) {
+			h.fail(&Error{Kind: "protocol", Message: "invalid MSP envelope", Err: err})
+			return
 		}
-		if m.Method == "" && len(m.ID) > 0 {
-			key := string(m.ID)
+		if hasID && !validRPCID(m.ID) {
+			h.fail(&Error{Kind: "protocol", Message: "invalid MSP request ID"})
+			return
+		}
+		if m.Method == "" {
 			h.mu.Lock()
-			ch := h.pending[key]
+			ch := h.pending[string(m.ID)]
 			h.mu.Unlock()
 			if ch != nil {
 				select {
@@ -232,59 +316,59 @@ func (h *MSPHost) readLoop() {
 			}
 			continue
 		}
-		if m.Method != "" && len(m.ID) > 0 && string(m.ID) != "null" {
+		if hasID {
+			req := Request{ID: m.ID, Params: m.Params, Method: m.Method, host: h, state: &receiptState{}}
 			select {
-			case h.requests <- Request{ID: m.ID, Params: m.Params, Method: m.Method, host: h}:
+			case h.requests <- req:
 			default:
-				h.fail(errors.New("MSP request queue overflow"))
-				_ = h.cmd.Process.Kill()
-				goto end
+				h.fail(&Error{Kind: "transport", Message: "request queue overflow", Err: ErrOverflow})
+				return
 			}
 			continue
 		}
-		if m.Method != "" {
-			if m.Method == "turn/completed" {
-				var tr TurnResult
-				if json.Unmarshal(m.Params, &tr) == nil {
-					tr.Raw = raw
-					h.mu.Lock()
-					if ch := h.turnWaiters[tr.TurnID]; ch != nil {
-						select {
-						case ch <- tr:
-						default:
-						}
-					} else if len(h.terminals) < 512 {
-						h.terminals[tr.TurnID] = tr
-					} else {
-						h.mu.Unlock()
-						h.fail(errors.New("MSP terminal queue overflow"))
-						_ = h.cmd.Process.Kill()
-						goto end
-					}
-					h.mu.Unlock()
-				}
+		h.publish(Notification{Method: m.Method, Params: m.Params, Raw: raw})
+	}
+	if err := sc.Err(); err != nil {
+		select {
+		case <-h.processExited:
+			if h.processErr != nil {
+				h.fail(h.processErr)
+				return
 			}
-			select {
-			case h.notifications <- Notification{Method: m.Method, Params: m.Params, Raw: raw}:
-			default:
-				h.fail(errors.New("MSP notification queue overflow"))
-				_ = h.cmd.Process.Kill()
-				goto end
-			}
+		default:
 		}
+		h.fail(&Error{Kind: "protocol", Message: "read MSP frame", Err: err})
+		return
 	}
-end:
-	err := sc.Err()
-	if err != nil {
-		h.fail(&Error{Kind: "transport", Message: "read MSP", Err: err})
-	} else {
-		h.fail(io.EOF)
+	// EOF normally races process exit. Preserve its exit status when available;
+	// stdout closed by a still-running peer is a transport failure, not a hang.
+	select {
+	case <-h.processExited:
+		if h.processErr != nil {
+			h.fail(h.processErr)
+		} else {
+			h.fail(io.EOF)
+		}
+	case <-time.After(100 * time.Millisecond):
+		h.fail(&Error{Kind: "transport", Message: "MSP stdout closed before process exit", Err: io.EOF})
 	}
-	_ = h.stdin.Close()
-	_ = h.cmd.Wait()
+
+}
+func validRPCID(id json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(id, &s) == nil {
+		return true
+	}
+	var n json.Number
+	if json.Unmarshal(id, &n) != nil {
+		return false
+	}
+	_, err := strconv.ParseInt(n.String(), 10, 64)
+	return err == nil
 }
 
-// Close stops and reaps the process. A context without deadline uses a two-second grace period.
+// Close closes stdin, allows a graceful exit, then terminates and reaps the child.
+// No deadline means a two-second grace period. It is safe to call concurrently.
 func (h *MSPHost) Close(ctx context.Context) error {
 	h.closeOnce.Do(func() { _ = h.stdin.Close() })
 	if _, ok := ctx.Deadline(); !ok {
@@ -295,8 +379,13 @@ func (h *MSPHost) Close(ctx context.Context) error {
 	select {
 	case <-h.processDone:
 		return nil
+	default:
+	}
+	select {
+	case <-h.processDone:
+		return nil
 	case <-ctx.Done():
-		_ = h.cmd.Process.Kill()
+		h.fail(ErrClosed)
 		<-h.processDone
 		return ctx.Err()
 	}

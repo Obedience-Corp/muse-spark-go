@@ -4,8 +4,9 @@ package muse
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"os/exec"
+	"time"
 )
 
 // Client holds process configuration. Do not mutate it while calls are running.
@@ -13,6 +14,9 @@ type Client struct {
 	BinPath    string
 	WorkingDir string
 	Env        []string
+	// Stderr receives native diagnostics. It may contain prompt or workspace data.
+	// A writer shared by concurrent calls must be concurrency-safe.
+	Stderr io.Writer
 }
 
 func NewClient(path string) *Client { return &Client{BinPath: path} }
@@ -26,7 +30,9 @@ func NewClientFromPath() (*Client, error) {
 func (c *Client) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, c.BinPath, args...)
 	cmd.Dir = c.WorkingDir
-	cmd.Env = append(os.Environ(), c.Env...)
+	cmd.Env = append(cmd.Environ(), c.Env...)
+	cmd.Stderr = c.Stderr
+	cmd.WaitDelay = time.Second
 	return cmd
 }
 func (c *Client) Version(ctx context.Context) (string, error) {
@@ -35,4 +41,9 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("muse version: %w", err)
 	}
 	return string(b), nil
+}
+
+// RunPrompt runs a prompt without a deadline. Prefer RunPromptCtx in services.
+func (c *Client) RunPrompt(prompt string, opts *RunOptions) (*Result, error) {
+	return c.RunPromptCtx(context.Background(), prompt, opts)
 }

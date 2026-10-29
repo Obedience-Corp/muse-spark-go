@@ -25,3 +25,14 @@ func TestInvalidCommandID(t *testing.T) {
 		t.Fatal("expected invalid command id")
 	}
 }
+
+func TestOptionValidation(t *testing.T) {
+	for _, o := range []RunOptions{{WorktreeBase: "main"}, {Worktree: "existing"}, {Worktree: "bogus"}, {DisableRequestUserInput: true, UserInputAutoResolve: true}, {Images: []string{""}}, {Config: []string{""}}} {
+		if _, err := o.args(); err == nil {
+			t.Errorf("accepted invalid options %+v", o)
+		}
+	}
+	if _, err := (HostOptions{UserInputDialogs: true, DisableRequestUserInput: true}).args(); err == nil {
+		t.Fatal("contradictory input capabilities")
+	}
+}

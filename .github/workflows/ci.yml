@@ -33,3 +33,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./...
+  native-echo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download checksum-pinned Muse and Go dependencies
+        run: |
+          bash scripts/fetch-muse.sh "$RUNNER_TEMP/muse-sdk"
+          docker run --rm --mount type=bind,src="$GITHUB_WORKSPACE",dst=/src,readonly --mount type=bind,src="$RUNNER_TEMP",dst=/deps -w /src -e GOMODCACHE=/deps/gomod golang:1.24-bookworm go mod download
+      - name: Exercise real SDK demos without network access
+        run: |
+          docker run --rm --network none --mount type=bind,src="$RUNNER_TEMP/muse-sdk/muse",dst=/muse,readonly --mount type=bind,src="$GITHUB_WORKSPACE",dst=/src,readonly --mount type=bind,src="$RUNNER_TEMP/gomod",dst=/go/pkg/mod,readonly -w /src golang:1.24-bookworm go run ./examples/demo -muse /muse -demo all
