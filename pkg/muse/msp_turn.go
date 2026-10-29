@@ -149,7 +149,7 @@ func (t *Turn) Wait(ctx context.Context) (TurnResult, error) {
 	case <-t.done:
 		return t.copyResult()
 	case <-ctx.Done():
-		return TurnResult{}, ctx.Err()
+		return TurnResult{}, contextError(ctx)
 	}
 }
 func (t *Turn) copyResult() (TurnResult, error) {

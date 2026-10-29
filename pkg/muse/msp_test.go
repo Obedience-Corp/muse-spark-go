@@ -16,6 +16,11 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv("MUSE_FAKE_HOST") == "1" {
+		if len(os.Args) > 1 && os.Args[1] == "--version" {
+			fmt.Fprintln(os.Stderr, "version ready")
+			time.Sleep(10 * time.Second)
+			os.Exit(0)
+		}
 		if len(os.Args) > 1 && os.Args[1] == "exec" {
 			fakeExec()
 			os.Exit(0)
@@ -46,6 +51,7 @@ func fakeHost() {
 		case "initialize":
 			switch os.Getenv("MUSE_FAKE_SCENARIO") {
 			case "startup-hang":
+				fmt.Fprintln(os.Stderr, "initialize ready")
 				time.Sleep(10 * time.Second)
 				return
 			case "version":

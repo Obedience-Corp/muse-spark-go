@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"sync"
 	"time"
 )
 
@@ -50,7 +49,7 @@ type Request struct {
 }
 
 type receiptState struct {
-	mu   sync.Mutex
+	gate chan struct{}
 	sent bool
 }
 
@@ -67,8 +66,20 @@ func (r Request) RespondContext(ctx context.Context, responseErr *Error) error {
 	if r.host == nil || r.state == nil {
 		return &Error{Kind: "validation", Message: "request has no host"}
 	}
-	r.state.mu.Lock()
-	defer r.state.mu.Unlock()
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	select {
+	case r.state.gate <- struct{}{}:
+	case <-ctx.Done():
+		return contextError(ctx)
+	case <-r.host.Done():
+		return r.host.Err()
+	}
+	defer func() { <-r.state.gate }()
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if r.state.sent {
 		return &Error{Kind: "validation", Message: "request already acknowledged"}
 	}

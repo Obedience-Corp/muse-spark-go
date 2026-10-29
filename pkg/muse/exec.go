@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -35,6 +36,10 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 	go func() {
 		defer close(events)
 		defer close(errs)
+		if err := contextError(ctx); err != nil {
+			errs <- err
+			return
+		}
 		args, err := o.args()
 		if err != nil {
 			errs <- &Error{Kind: "validation", Message: "options", Err: err}
@@ -56,7 +61,7 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 		}
 		cmd.Stderr = c.Stderr
 		if err = cmd.Start(); err != nil {
-			errs <- &Error{Kind: "process", Message: "start exec", Err: err}
+			errs <- &Error{Kind: "process", Message: "start exec", Err: errors.Join(err, contextError(ctx))}
 			return
 		}
 		// A descendant may retain stdout after the owned process exits. Closing
@@ -97,7 +102,7 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 			select {
 			case events <- e:
 			case <-ctx.Done():
-				err = ctx.Err()
+				err = contextError(ctx)
 			}
 			if err != nil {
 				break
@@ -110,8 +115,8 @@ func (c *Client) StreamPrompt(ctx context.Context, prompt string, opts *RunOptio
 			_ = cmd.Process.Kill()
 		}
 		waitErr := cmd.Wait()
-		if ctx.Err() != nil {
-			errs <- ctx.Err()
+		if contextError(ctx) != nil {
+			errs <- contextError(ctx)
 			return
 		}
 		if err != nil {

@@ -57,3 +57,21 @@ Recovery belongs to the application's view reducer:
 5. If an earlier terminal was lost, observe it in replay rather than resubmitting the model turn.
 
 `SubscribeView` can request native replay after an observed cursor. The SDK does not automatically merge that replay into a caller's UI state or claim ephemeral deltas are recoverable. Raw events and cursor-based paging support applications with different projection models.
+
+## Context contract
+
+| Operation | Context scope and cancellation behavior |
+| --- | --- |
+| `Version`, `RunPromptCtx`, `StreamPrompt` | Controls the owned command; cancellation terminates it and releases the stdout reader. Execution errors preserve `context.Canceled` / `context.DeadlineExceeded` and a custom cancellation cause. |
+| `StartMSP` | Controls spawn/handshake. A cancelled or failed handshake aborts and reaps the process immediately, without a new graceful-shutdown interval. After successful return, the host is explicitly owned by the caller and closed with `Close`. |
+| `Call`, session commands, decisions, paging | The caller's context reaches serialized writer acquisition, pipe I/O, and response waiting. Cancelled waiters are removed. A context does not revoke an admitted native command. |
+| `NotifyContext`, `RespondContext` | Controls the write and any serialization wait, including contention between copies of the same receipt. Cancellation before writing does not consume a receipt. |
+| `Turn.Wait` | Controls this wait only. Native execution and local terminal tracking continue until a terminal, `CloseTracking`, or host shutdown. |
+| `ReplayView` | Controls each page request and checks cancellation before callbacks and after each page, including the final callback. |
+| `Close` | Bounds the graceful wait, then kills and reaps the process. Reaping can extend the return past the cancellation instant. |
+
+Cancellation results preserve both the standard context category and custom reasons supplied through `WithCancelCause` / `WithTimeoutCause`; use `errors.Is` rather than equality. A result already known to be complete can win a race with cancellation. A write cancelled in flight may have partially reached the peer, so the host is closed instead of continuing on a possibly corrupt stream.
+
+`RunPrompt` deliberately uses a background context. `Notify` and `Respond` deliberately use two-second defaults; use the context-taking variants to inherit an application's deadline. Subscriptions have explicit `Close` ownership. There is no automatic context-value or trace-metadata serialization into MSP: Go context values stay in the Go process, and the native protocol uses explicit session, turn, and command identifiers.
+
+Go cannot forcibly interrupt arbitrary caller-supplied code. `Stderr.Write`, `RunOptions.APIKey.Read`, custom JSON marshalers/unmarshalers passed to raw RPC, and replay visitors must return promptly or observe their own captured context. The SDK does not launch detached callback goroutines to hide a blocked callback. Use a finite API-key reader and nonblocking diagnostic sinks. A replay callback doing I/O should use the same context captured from its caller.
