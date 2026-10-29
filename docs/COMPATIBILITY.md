@@ -9,7 +9,7 @@
 | MSP | Schema version 1; unknown fingerprint warns, unsupported version fails |
 | Native runtime | macOS arm64 and Linux arm64 echo execution |
 | Compilation | Linux, macOS, Windows; amd64 and arm64 |
-| API stability | Pre-v1; no stable release promise |
+| API stability | v0.1.0 initial release; API may change before v1 |
 
 Tested stable fingerprint:
 
@@ -29,9 +29,13 @@ Raw `Call`, `NotifyContext`, and session `Command` allow other native methods. T
 
 Real-binary demos prove one-shot and streamed echo, multiple turns, durable restart/resume, history paging, cancel/interrupt, and restrictive approval mode. Protocol fixtures exercise malformed and oversized frames, early completion, out-of-order responses, per-session routing, queued reclamation, slow consumers, gap signaling, pagination cycles, stale-approval errors, explicit receipts, and decision/question IDs.
 
-Native model-generated approvals, questions, live gap induction, non-text inputs, and paid model providers have not been exercised. Replayed history is real; induced gap/overflow recovery semantics use fixtures. Windows and amd64 targets have compile checks, not native execution proof. The SDK manages the owned stdio host, not an external socket daemon or an entire arbitrary descendant process tree.
+Native model-generated approvals, questions, live gap induction, non-text inputs, and paid model providers have not been exercised. Replayed history is real; induced gap/overflow recovery semantics use fixtures. Windows and amd64 targets have compile checks, not native execution proof. The SDK must remain importable and compilable on every Obey target even when Muse is unavailable at runtime. Ryzen Strix uses the same `amd64` Go target; the SDK does not require GPU/NPU-specific code. The SDK manages the owned stdio host, not an external socket daemon or an entire arbitrary descendant process tree.
 
 `ReplayView` exposes durable recovery; the application owns state reconciliation and cannot recover lost ephemeral deltas. There is no automatic retry of model turns or permission decisions. No socket transport, login/installation manager, plugin manager, model budget accounting, or Obey provider is included in this SDK change.
+
+## Release scope
+
+`v0.1.0` is an initial public SDK release, not a claim of native feature parity on every platform. Platform availability of the Muse binary is a runtime concern: constructing/importing the SDK does not spawn Muse; explicit discovery or execution returns an error when it is absent. There are no native-library or cgo requirements in this module. The verified execution features and remaining integration boundaries above are part of the release contract.
 
 ## CI availability
 

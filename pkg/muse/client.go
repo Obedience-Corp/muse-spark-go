@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// SDKVersion is the module release reported by the default MSP client handshake.
+const SDKVersion = "0.1.0"
+
 // Client holds process configuration. Do not mutate it while calls are running.
 type Client struct {
 	BinPath    string

@@ -1,6 +1,7 @@
 # Muse Spark Go SDK
 
 [![CI](https://github.com/Obedience-Corp/muse-spark-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Obedience-Corp/muse-spark-go/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Obedience-Corp/muse-spark-go/pkg/muse.svg)](https://pkg.go.dev/github.com/Obedience-Corp/muse-spark-go/pkg/muse)
 [![Built with Festival](https://img.shields.io/badge/built%20with-Festival-7c3aed.svg)](https://github.com/Obedience-Corp/festival)
 [![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg)](go.mod)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -9,7 +10,7 @@ Run the Muse coding agent from Go. Stream responses, manage persistent conversat
 
 The SDK wraps an installed Muse binary. Muse owns model access, authentication, workspace policy, and session storage. The Go package owns subprocesses, protocol transport, event routing, and cancellation.
 
-**Status:** pre-v1 development. Tested with Muse Code **1.4.14** on macOS arm64 and Linux arm64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
+**Status:** initial `v0.1.0` release. Tested with Muse Code **1.4.14** on macOS arm64 and Linux arm64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
 
 ## Features
 
@@ -25,13 +26,13 @@ The SDK wraps an installed Muse binary. Muse owns model access, authentication, 
 
 Requires Go 1.24+ and Muse available on `PATH` or at an explicit path. Install and authenticate Muse separately before using a model provider. Echo demos need no model credentials.
 
-This repository is private. Configure Git access for `Obedience-Corp` and include `github.com/Obedience-Corp/*` in your existing `GOPRIVATE` setting, then add the package:
+The module is public and can be installed through the standard Go module proxy:
 
 ```sh
-go get github.com/Obedience-Corp/muse-spark-go/pkg/muse
+go get github.com/Obedience-Corp/muse-spark-go/pkg/muse@v0.1.0
 ```
 
-Pin a reviewed module version or commit in applications. The SDK does not install or update Muse. Set `MUSE_NO_AUTO_UPDATE=1` when using its launcher with a pinned version.
+See the [changelog](CHANGELOG.md) for release notes. The SDK does not install or update Muse. Set `MUSE_NO_AUTO_UPDATE=1` when using its launcher with a pinned version.
 
 ## Quick start
 

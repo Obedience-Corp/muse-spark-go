@@ -123,7 +123,7 @@ func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) 
 		o.ClientInfo.Name = "muse_go_sdk"
 	}
 	if o.ClientInfo.Version == "" {
-		o.ClientInfo.Version = "0.1.0-dev"
+		o.ClientInfo.Version = SDKVersion
 	}
 	params := map[string]any{"clientInfo": o.ClientInfo, "capabilities": map[string]any{"userInputDialogs": o.UserInputDialogs}}
 	if err = h.Call(ctx, "initialize", params, &h.Initialize); err != nil {
