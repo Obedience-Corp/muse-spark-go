@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: golang:${{ matrix.go }}-bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.24', '1.26']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: test -z "$(gofmt -l pkg examples)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...
+  cross-build:
+    runs-on: ubuntu-latest
+    container: golang:1.26-bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./...
