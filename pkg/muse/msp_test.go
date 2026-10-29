@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -38,8 +39,22 @@ func fakeHost() {
 		if len(x.ID) == 0 {
 			continue
 		}
+		if fakeHardening(x.Method, x.ID, x.Params) {
+			continue
+		}
 		switch x.Method {
 		case "initialize":
+			switch os.Getenv("MUSE_FAKE_SCENARIO") {
+			case "startup-hang":
+				time.Sleep(10 * time.Second)
+				return
+			case "version":
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"schema":{"version":2}}}`+"\n", x.ID)
+				continue
+			case "fingerprint":
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"schema":{"version":1,"fingerprint":"future"}}}`+"\n", x.ID)
+				continue
+			}
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"schema":{"version":1,"fingerprint":"%s"}}}`+"\n", x.ID, knownFingerprint)
 		case "session/start":
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"session":{"sessionId":"s1"},"viewCursor":"c1"}}`+"\n", x.ID)
@@ -171,6 +186,38 @@ func TestHostExitFailsPendingCall(t *testing.T) {
 
 func fakeExec() {
 	switch os.Getenv("MUSE_FAKE_SCENARIO") {
+	case "descendant":
+		time.Sleep(2 * time.Second)
+		return
+	case "inherited-stdout":
+		child := exec.Command(os.Args[0], "exec")
+		child.Env = append(os.Environ(), "MUSE_FAKE_SCENARIO=descendant")
+		child.Stdout = os.Stdout
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		return
+	case "null":
+		fmt.Println("null")
+		return
+	case "no-type":
+		fmt.Println(`{"payload":{}}`)
+		return
+	case "oversized":
+		fmt.Println(strings.Repeat("x", maxFrameBytes+1))
+		return
+	case "exit":
+		os.Exit(7)
+	case "flood":
+		for i := 0; i < 10000; i++ {
+			fmt.Println(`{"payload_type":"item","payload":{}}`)
+		}
+		return
+	case "duplicate":
+		fmt.Println(`{"payload_type":"run.terminal.completed","payload":{"terminal":"completed"}}`)
+	case "bad-terminal":
+		fmt.Println(`{"payload_type":"run.terminal.completed","payload":{"terminal":"failed"}}`)
+		return
 	case "invalid":
 		fmt.Println("not json")
 		return
@@ -225,10 +272,10 @@ func TestDecisionsCarryServerIdentifiers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DecideApproval(context.Background(), "a1", "deny", json.RawMessage(`{"sourceIndex":2}`)); err != nil {
+	if err := s.DecideApproval(context.Background(), "a1", "deny", json.RawMessage(`{"approvalId":"a1","sourceIndex":2}`)); err != nil {
 		t.Fatal(err)
 	}
-	answers := []map[string]string{{"questionId": "question-1", "freeText": "yes"}}
+	answers := []InputAnswer{{QuestionID: "question-1", FreeText: "yes"}}
 	if err := s.AnswerInput(context.Background(), "q1", answers); err != nil {
 		t.Fatal(err)
 	}

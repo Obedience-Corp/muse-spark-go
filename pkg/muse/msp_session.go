@@ -42,9 +42,15 @@ func (h *MSPHost) StartSession(ctx context.Context, o SessionOptions) (*Session,
 	if err = h.Call(ctx, "session/start", o, &out); err != nil {
 		return nil, err
 	}
+	if out.Session.SessionID == "" {
+		return nil, &Error{Kind: "protocol", Message: "session/start returned no sessionId"}
+	}
 	return &Session{host: h, Info: out.Session, Cursor: out.Cursor}, nil
 }
 func (h *MSPHost) ResumeSession(ctx context.Context, sessionID string) (*Session, json.RawMessage, error) {
+	if sessionID == "" {
+		return nil, nil, &Error{Kind: "validation", Message: "session ID is required"}
+	}
 	id, err := commandID("")
 	if err != nil {
 		return nil, nil, err
@@ -61,69 +67,12 @@ func (h *MSPHost) ResumeSession(ctx context.Context, sessionID string) (*Session
 	if err = json.Unmarshal(raw, &out); err != nil {
 		return nil, nil, err
 	}
+	if out.Session.SessionID != sessionID {
+		return nil, nil, &Error{Kind: "protocol", Message: "resume returned a different session"}
+	}
 	return &Session{host: h, Info: out.Session, Cursor: out.Cursor}, raw, nil
 }
 
-type Turn struct {
-	host          *MSPHost
-	SessionID, ID string
-	Disposition   string
-	done          chan TurnResult
-}
-
-func (s *Session) Send(ctx context.Context, input []InputPart) (*Turn, error) {
-	if len(input) == 0 {
-		return nil, &Error{Kind: "validation", Message: "empty turn input"}
-	}
-	id, err := commandID("")
-	if err != nil {
-		return nil, err
-	}
-	var out struct {
-		TurnID      string `json:"turnId"`
-		Disposition string `json:"disposition"`
-	}
-	if err = s.host.Call(ctx, "turn/start", map[string]any{"commandId": id, "sessionId": s.Info.SessionID, "input": input}, &out); err != nil {
-		return nil, err
-	}
-	if out.TurnID == "" {
-		return nil, &Error{Kind: "protocol", Message: "turn/start returned no turnId"}
-	}
-	t := &Turn{host: s.host, SessionID: s.Info.SessionID, ID: out.TurnID, Disposition: out.Disposition, done: make(chan TurnResult, 1)}
-	s.host.mu.Lock()
-	if _, exists := s.host.turnWaiters[t.ID]; exists {
-		s.host.mu.Unlock()
-		return nil, &Error{Kind: "protocol", Message: "turn/start returned an already tracked turn; submission was admitted"}
-	}
-	if prior, ok := s.host.terminals[t.ID]; ok {
-		t.done <- prior
-		delete(s.host.terminals, t.ID)
-	}
-	s.host.turnWaiters[t.ID] = t.done
-	s.host.mu.Unlock()
-	return t, nil
-}
-func (t *Turn) Wait(ctx context.Context) (TurnResult, error) {
-	select {
-	case r := <-t.done:
-		t.host.mu.Lock()
-		delete(t.host.turnWaiters, t.ID)
-		t.host.mu.Unlock()
-		return r, nil
-	case <-ctx.Done():
-		return TurnResult{}, ctx.Err()
-	case <-t.host.done:
-		select {
-		case r := <-t.done:
-			t.host.mu.Lock()
-			delete(t.host.turnWaiters, t.ID)
-			t.host.mu.Unlock()
-			return r, nil
-		default:
-		}
-		return TurnResult{}, &Error{Kind: "transport", Message: "host closed before turn completed", Err: t.host.Err()}
-	}
-}
 func (t *Turn) action(ctx context.Context, method string) error {
 	id, err := commandID("")
 	if err != nil {
@@ -156,16 +105,30 @@ func (s *Session) Pending(ctx context.Context) (json.RawMessage, error) {
 
 // DecideApproval submits a server-offered choice for the current requirement.
 func (s *Session) DecideApproval(ctx context.Context, approvalID, choiceID string, requirement json.RawMessage) error {
-	if approvalID == "" || choiceID == "" || len(requirement) == 0 {
+	if approvalID == "" || choiceID == "" || !json.Valid(requirement) || string(requirement) == "null" {
 		return &Error{Kind: "validation", Message: "approval, choice and requirement are required"}
+	}
+	var ref struct {
+		ApprovalID  string `json:"approvalId"`
+		SourceIndex *int   `json:"sourceIndex"`
+	}
+	if err := json.Unmarshal(requirement, &ref); err != nil || ref.ApprovalID != approvalID || ref.SourceIndex == nil || *ref.SourceIndex < 0 {
+		return &Error{Kind: "validation", Message: "requirement must identify the same approval and a nonnegative source index"}
 	}
 	return s.Command(ctx, "approval/decide", map[string]any{"approvalId": approvalID, "choiceId": choiceID, "requirementId": requirement}, nil)
 }
 
 // AnswerInput submits answers that use the question IDs from the request.
-func (s *Session) AnswerInput(ctx context.Context, inputID string, answers any) error {
-	if inputID == "" || answers == nil {
+func (s *Session) AnswerInput(ctx context.Context, inputID string, answers []InputAnswer) error {
+	if inputID == "" || len(answers) == 0 {
 		return &Error{Kind: "validation", Message: "input ID and answers are required"}
+	}
+	seen := make(map[string]bool, len(answers))
+	for _, answer := range answers {
+		if answer.QuestionID == "" || seen[answer.QuestionID] {
+			return &Error{Kind: "validation", Message: "answers require unique question IDs"}
+		}
+		seen[answer.QuestionID] = true
 	}
 	return s.Command(ctx, "userInput/answer", map[string]any{"userInputId": inputID, "answers": answers}, nil)
 }

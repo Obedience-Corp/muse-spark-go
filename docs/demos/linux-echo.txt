@@ -1,0 +1,51 @@
+Muse Code 1.4.14 (1.4.14-R7309.1)
+Provider: echo | isolated configuration | no model credentials
+
+── basic ──
+Response: echo: Hello from the Muse Go SDK.
+Terminal: completed
+
+── streaming ──
+event: runtime.command.accepted
+event: session.run.linked
+event: turn.input.user
+event: run.lifecycle.started
+event: task.stream.linked
+event: task.lifecycle.proposed
+event: task.lifecycle.accepted
+event: task.lifecycle.scheduled
+event: task.lifecycle.side_effect_intent
+event: task.lifecycle.started
+event: run.output.delta
+event: task.lifecycle.completed
+event: run.usage
+echo: Hello from the Muse Go SDK.
+Terminal: completed
+Received 14 runtime records
+
+── sessions ──
+muse> echo: Hello from the Muse Go SDK.
+Terminal: completed
+muse> echo: A second turn in the same session.
+Terminal: completed
+
+── resume ──
+muse> echo: Hello from the Muse Go SDK.
+Terminal: completed
+Host restarted; native session ID preserved
+Replayed 10 durable view events
+muse> echo: A second turn in the same session.
+Terminal: completed
+
+── cancel ──
+Cancellation terminal: cancelled
+Interruption terminal: cancelled
+
+── permissions ──
+Approval mode: denyUnmatched
+Pending requests: {"approvals":[],"userInputs":[]}
+Echo does not request tools; approval receipt/decision tests use the protocol fixture.
+
+── errors ──
+Missing executable → process error
+Cancelled context → context.Canceled
