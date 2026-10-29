@@ -40,3 +40,11 @@ The Linux arm64 artifact was downloaded from the public Muse release manifest an
 ## Remaining boundaries
 
 Native model-generated approval and input UI flows, induced live view gaps, paid providers, and non-text inputs require controlled integration proof. Application state reconciliation after replay is intentionally explicit. The SDK is ready for review of the tested core; this record does not authorize a v1 claim or substitute for the separate Obey integration gates. See [compatibility](COMPATIBILITY.md).
+
+## Follow-up context audit
+
+After PR #2 merged, audited command execution, host startup, writer/receipt serialization, RPC response waits, session wrappers, turn waits, replay, and close. Fixed cancellation-category loss in `Version`, custom-cause loss in cancellation returns, receipt mutex contention that ignored deadlines, a fresh two-second cleanup delay after cancelled startup, and success returned after a cancelling final replay callback.
+
+Regression tests cover mid-flight version cancellation, stalled handshake cancellation, host survival after the startup context ends, receipt contention, RPC waiter detachment, writer acquisition deadlines, stream cancellation, final replay-callback cancellation, wait-only turn cancellation, and forced shutdown/reaping. Tests preserve intentional host/turn lifetime boundaries. The [context contract](MSP.md#context-contract) documents those boundaries and the cooperative requirement for caller-provided I/O and callbacks.
+
+Context-audit validation passed: targeted race tests, `just check`, full Go 1.24 and Go 1.26 network-disabled container race/build/vet checks, and all seven real Linux Muse demos. No public method signatures or native host/turn ownership semantics changed.

@@ -63,7 +63,7 @@ func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) 
 	if err != nil {
 		return nil, &Error{Kind: "validation", Message: "host options", Err: err}
 	}
-	if err = ctx.Err(); err != nil {
+	if err = contextError(ctx); err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(c.BinPath, args...)
@@ -127,18 +127,19 @@ func (c *Client) StartMSP(ctx context.Context, o HostOptions) (*MSPHost, error) 
 	}
 	params := map[string]any{"clientInfo": o.ClientInfo, "capabilities": map[string]any{"userInputDialogs": o.UserInputDialogs}}
 	if err = h.Call(ctx, "initialize", params, &h.Initialize); err != nil {
-		_ = h.Close(context.Background())
+		h.abortStartup(err)
 		return nil, fmt.Errorf("msp initialize: %w", err)
 	}
 	if h.Initialize.Schema.Version != 1 {
-		_ = h.Close(context.Background())
-		return nil, &Error{Kind: "compatibility", Message: fmt.Sprintf("unsupported MSP schema version %d", h.Initialize.Schema.Version)}
+		err = &Error{Kind: "compatibility", Message: fmt.Sprintf("unsupported MSP schema version %d", h.Initialize.Schema.Version)}
+		h.abortStartup(err)
+		return nil, err
 	}
 	if h.Initialize.Schema.Fingerprint != knownFingerprint {
 		h.Warnings = append(h.Warnings, "MSP stable schema fingerprint differs from tested version")
 	}
 	if err = h.NotifyContext(ctx, "initialized", nil); err != nil {
-		_ = h.Close(context.Background())
+		h.abortStartup(err)
 		return nil, err
 	}
 	return h, nil
@@ -165,7 +166,7 @@ func (h *MSPHost) fail(err error) {
 // writeContext serializes complete frames. A timeout waiting for the writer is
 // harmless; a timeout during a write terminates the host (partial-frame ambiguity).
 func (h *MSPHost) writeContext(ctx context.Context, v any) error {
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		return err
 	}
 	b, err := json.Marshal(v)
@@ -178,12 +179,12 @@ func (h *MSPHost) writeContext(ctx context.Context, v any) error {
 	select {
 	case h.writer <- struct{}{}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return contextError(ctx)
 	case <-h.done:
 		return h.Err()
 	}
 	defer func() { <-h.writer }()
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		return err
 	}
 	select {
@@ -216,7 +217,7 @@ func (h *MSPHost) writeContext(ctx context.Context, v any) error {
 		}
 		return err
 	case <-ctx.Done():
-		err = &Error{Kind: "transport", Message: "write cancelled; outcome may be unknown", Err: ctx.Err()}
+		err = &Error{Kind: "transport", Message: "write cancelled; outcome may be unknown", Err: contextError(ctx)}
 		h.fail(err)
 		<-result
 		return err
@@ -243,7 +244,7 @@ func (h *MSPHost) NotifyContext(ctx context.Context, method string, params any) 
 	return h.writeContext(ctx, m)
 }
 func (h *MSPHost) Call(ctx context.Context, method string, params any, result any) error {
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		return err
 	}
 	if method == "" {
@@ -267,7 +268,7 @@ func (h *MSPHost) Call(ctx context.Context, method string, params any, result an
 	select {
 	case r = <-ch:
 	case <-ctx.Done():
-		return ctx.Err()
+		return contextError(ctx)
 	case <-h.done:
 		// A received reply is authoritative even if EOF immediately follows it.
 		select {
@@ -317,7 +318,7 @@ func (h *MSPHost) readLoop() {
 			continue
 		}
 		if hasID {
-			req := Request{ID: m.ID, Params: m.Params, Method: m.Method, host: h, state: &receiptState{}}
+			req := Request{ID: m.ID, Params: m.Params, Method: m.Method, host: h, state: &receiptState{gate: make(chan struct{}, 1)}}
 			select {
 			case h.requests <- req:
 			default:
@@ -385,8 +386,15 @@ func (h *MSPHost) Close(ctx context.Context) error {
 	case <-h.processDone:
 		return nil
 	case <-ctx.Done():
-		h.fail(ErrClosed)
+		h.fail(&Error{Kind: "transport", Message: "host close cancelled", Err: contextError(ctx)})
 		<-h.processDone
-		return ctx.Err()
+		return contextError(ctx)
 	}
+}
+
+// No host escapes a failed handshake. Abort immediately instead of spending a
+// fresh background grace period after the caller has cancelled; still reap it.
+func (h *MSPHost) abortStartup(err error) {
+	h.fail(err)
+	<-h.processDone
 }

@@ -59,12 +59,15 @@ func (s *Session) ReplayView(ctx context.Context, after string, visit func(Notif
 			return err
 		}
 		for _, n := range page.Events {
-			if err = ctx.Err(); err != nil {
+			if err = contextError(ctx); err != nil {
 				return err
 			}
 			if err = visit(n); err != nil {
 				return err
 			}
+		}
+		if err = contextError(ctx); err != nil {
+			return err
 		}
 		if page.NextCursor == nil {
 			return nil

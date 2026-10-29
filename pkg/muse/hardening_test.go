@@ -351,6 +351,8 @@ func fakeHardening(method string, id, params json.RawMessage) bool {
 		reply(`{}`)
 	case "exit-seven":
 		os.Exit(7)
+	case "no-response-observed":
+		event("test/requestReceived", `{}`)
 	case "no-response":
 	case "invalid-json":
 		fmt.Println("{")

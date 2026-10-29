@@ -3,6 +3,7 @@ package muse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -38,7 +39,7 @@ func (c *Client) command(ctx context.Context, args ...string) *exec.Cmd {
 func (c *Client) Version(ctx context.Context) (string, error) {
 	b, err := c.command(ctx, "--version").Output()
 	if err != nil {
-		return "", fmt.Errorf("muse version: %w", err)
+		return "", fmt.Errorf("muse version: %w", errors.Join(err, contextError(ctx)))
 	}
 	return string(b), nil
 }
