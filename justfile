@@ -9,3 +9,4 @@ default:
 check: (build::all) (test::all) (lint::all)
 
 mod demo '.justfiles/demos.just'
+mod release '.justfiles/release.just'
