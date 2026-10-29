@@ -53,6 +53,36 @@ func fakeHost() {
 			time.Sleep(10 * time.Second)
 		case "crash":
 			return
+		case "approval/decide":
+			var p struct {
+				SessionID   string `json:"sessionId"`
+				ApprovalID  string `json:"approvalId"`
+				ChoiceID    string `json:"choiceId"`
+				CommandID   string `json:"commandId"`
+				Requirement struct {
+					SourceIndex int `json:"sourceIndex"`
+				} `json:"requirementId"`
+			}
+			_ = json.Unmarshal(x.Params, &p)
+			if p.SessionID != "s1" || p.ApprovalID != "a1" || p.ChoiceID != "deny" || p.Requirement.SourceIndex != 2 || p.CommandID == "" {
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"bad approval"}}`+"\n", x.ID)
+			} else {
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", x.ID)
+			}
+		case "userInput/answer":
+			var p struct {
+				UserInputID string `json:"userInputId"`
+				Answers     []struct {
+					QuestionID string `json:"questionId"`
+					FreeText   string `json:"freeText"`
+				} `json:"answers"`
+			}
+			_ = json.Unmarshal(x.Params, &p)
+			if p.UserInputID != "q1" || len(p.Answers) != 1 || p.Answers[0].QuestionID != "question-1" || p.Answers[0].FreeText != "yes" {
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"bad answer"}}`+"\n", x.ID)
+			} else {
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", x.ID)
+			}
 		case "question":
 			fmt.Println(`{"jsonrpc":"2.0","id":"request-1","method":"approval/request","params":{"approvalId":"a1"}}`)
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", x.ID)
@@ -186,5 +216,23 @@ func TestCancelledBlockedWriteStopsHost(t *testing.T) {
 	case <-h.Done():
 	case <-time.After(time.Second):
 		t.Fatal("host did not terminate")
+	}
+}
+
+func TestDecisionsCarryServerIdentifiers(t *testing.T) {
+	h := newFake(t)
+	s, err := h.StartSession(context.Background(), SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideApproval(context.Background(), "a1", "deny", json.RawMessage(`{"sourceIndex":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	answers := []map[string]string{{"questionId": "question-1", "freeText": "yes"}}
+	if err := s.AnswerInput(context.Background(), "q1", answers); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideApproval(context.Background(), "a1", "", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("missing choice should fail")
 	}
 }
