@@ -10,6 +10,14 @@ Protocol stdout and diagnostic stderr are separate. Stderr is discarded unless `
 
 Writes are serialized complete JSON-RPC frames. Cancellation while waiting for the writer leaves the host usable. Cancellation during a pipe write closes the host because the peer may have received a partial frame. `Call` timeout after sending stops waiting without retracting the native command. Request outcomes may be unknown after a disconnect; do not blindly resubmit a side effect under a fresh command ID.
 
+## Model catalog
+
+`ListModels(ctx, sessionID)` calls `model/list`, a query that records no command and emits no view event. Rows are a snapshot, newest release first; there is no catalog subscription. The list may be empty. `IsDefault` and `IsActive` may be false on every row, and `IsActive` is set only when a session ID is supplied. `Source` is an open vocabulary: label unknown values honestly rather than treating them as errors.
+
+`Client.ListModels(ctx, HostOptions)` owns a short-lived host for applications that only need the catalog. The catalog belongs to the host's provider, so pass the provider the application will run. A host without `model/list` should answer JSON-RPC method-not-found (`-32601`), which arrives as a remote `*Error`; only the fixture exercises this. Applications should fall back to Muse's default model on any error.
+
+`Variants` is the complete set of selectable efforts (`Tiers`, or `Unknown` when the host declares the capability unknown). `ReasoningEffortVariants` only describes the tiers the catalog labels and may be empty, so build effort choices from `Variants`. `Client.ListModels` copies the host's startup `Warnings` onto the list.
+
 ## Turn ownership
 
 `Send` registers observation before sending `turn/start`. Notifications can precede the admission reply. A `Turn` takes its ID from that reply, including when the host queues or steers the input. `TurnOptions.CommandID` accepts an explicit UUIDv7 for deliberate idempotent retry; omission generates one. The SDK performs no retries.

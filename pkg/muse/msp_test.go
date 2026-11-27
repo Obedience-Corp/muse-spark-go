@@ -104,6 +104,8 @@ func fakeHost() {
 			} else {
 				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", x.ID)
 			}
+		case "model/list":
+			fakeModelList(x.ID, x.Params)
 		case "question":
 			fmt.Println(`{"jsonrpc":"2.0","id":"request-1","method":"approval/request","params":{"approvalId":"a1"}}`)
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", x.ID)
