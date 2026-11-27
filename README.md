@@ -10,7 +10,7 @@ Run the Muse coding agent from Go. Stream responses, manage persistent conversat
 
 The SDK wraps an installed Muse binary. Muse owns model access, authentication, workspace policy, and session storage. The Go package owns subprocesses, protocol transport, event routing, and cancellation.
 
-**Status:** initial `v0.1.0` release. Tested with Muse Code **1.4.14** on macOS arm64, Linux arm64, and Linux amd64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
+**Status:** `v0.2.0` pre-v1 release. Full surface tested with Muse Code **1.4.14** on macOS arm64, Linux arm64, and Linux amd64; demos and model catalog listing also verified with Muse Code 1.4.25 on macOS arm64. The public API may change before v1. See [compatibility and validation](docs/COMPATIBILITY.md) for the tested surface and remaining limits.
 
 ## Features
 
@@ -19,6 +19,7 @@ The SDK wraps an installed Muse binary. Muse owns model access, authentication, 
 - Per-turn event streams, repeatable terminal waits, and independent event subscriptions.
 - Native cancel and interrupt commands, including queued-turn reclamation.
 - Approval and user-input payloads, explicit presentation receipts, and separate decisions.
+- Typed model catalog listing (`model/list`) for building model pickers.
 - Typed errors, raw payload preservation, bounded queues, and explicit delivery-gap errors.
 - Seven runnable demos, modular Just recipes, protocol fixtures, and real-binary checks.
 
@@ -29,7 +30,7 @@ Requires Go 1.24+ and Muse available on `PATH` or at an explicit path. Install a
 The module is public and can be installed through the standard Go module proxy:
 
 ```sh
-go get github.com/Obedience-Corp/muse-spark-go/pkg/muse@v0.1.0
+go get github.com/Obedience-Corp/muse-spark-go/pkg/muse@v0.2.0
 ```
 
 See the [changelog](CHANGELOG.md) for release notes. The SDK does not install or update Muse. Set `MUSE_NO_AUTO_UPDATE=1` when using its launcher with a pinned version.

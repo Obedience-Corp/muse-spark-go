@@ -5,11 +5,11 @@
 | Component | Baseline / evidence |
 | --- | --- |
 | Go | Minimum 1.24; container checks also run on 1.26 |
-| Muse | Code 1.4.14, build 1.4.14-R7309.1 |
+| Muse | Code 1.4.14, build 1.4.14-R7309.1; demos and `model/list` also verified on Code 1.4.25 (macOS arm64) |
 | MSP | Schema version 1; unknown fingerprint warns, unsupported version fails |
 | Native runtime | macOS arm64, Linux arm64, and hosted Linux amd64 echo execution |
 | Compilation | Linux, macOS, Windows; amd64 and arm64 |
-| API stability | v0.1.0 initial release; API may change before v1 |
+| API stability | v0.2.0 pre-v1 release; API may change before v1 |
 
 Tested stable fingerprint:
 
@@ -21,7 +21,7 @@ Protocol shapes were checked against `muse schema generate-ts`, `muse exec --hel
 
 ## Surface
 
-Typed APIs cover exec prompts/streaming, MSP initialization, session start/resume, turn admission/events/terminal/cancel/interrupt, approval mode and decisions, user-input answers/cancel, session leave, and view paging/replay/subscription. `InputPart` includes text, image, skill, and video-reference wire fields; only text has native echo proof.
+Typed APIs cover exec prompts/streaming, MSP initialization, session start/resume, turn admission/events/terminal/cancel/interrupt, approval mode and decisions, user-input answers/cancel, session leave, view paging/replay/subscription, and model catalog listing (`model/list`). `InputPart` includes text, image, skill, and video-reference wire fields; only text has native echo proof.
 
 Raw `Call`, `NotifyContext`, and session `Command` allow other native methods. They are advanced escape hatches, not a promise of typed or tested parity with every Muse management command. Options intentionally cover the SDK's execution surface; consult Go documentation and native help for the available flags.
 
@@ -35,7 +35,7 @@ Native model-generated approvals, questions, live gap induction, non-text inputs
 
 ## Release scope
 
-`v0.1.0` is an initial public SDK release, not a claim of native feature parity on every platform. Platform availability of the Muse binary is a runtime concern: constructing/importing the SDK does not spawn Muse; explicit discovery or execution returns an error when it is absent. There are no native-library or cgo requirements in this module. The verified execution features and remaining integration boundaries above are part of the release contract.
+`v0.2.0` is a pre-v1 public SDK release, not a claim of native feature parity on every platform. Platform availability of the Muse binary is a runtime concern: constructing/importing the SDK does not spawn Muse; explicit discovery or execution returns an error when it is absent. There are no native-library or cgo requirements in this module. The verified execution features and remaining integration boundaries above are part of the release contract.
 
 ## CI availability
 
