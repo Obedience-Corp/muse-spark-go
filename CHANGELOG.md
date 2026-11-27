@@ -6,13 +6,13 @@ Adds typed model catalog listing so applications can offer Muse's real models in
 
 ### Added
 
-- `MSPHost.ListModels(ctx, sessionID)` calls the stable MSP `model/list` query and returns a typed `ModelList`: rows newest first with model ID, display label, provider/profile, default and active flags, limits, verbatim cost strings and reasoning-effort tiers. Nullable catalog fields are pointers; `Variants` keeps its raw array-or-unknown form; `Raw` preserves future fields.
+- `MSPHost.ListModels(ctx, sessionID)` calls the stable MSP `model/list` query and returns a typed `ModelList`: rows newest first with model ID, display label, provider/profile, default and active flags, limits, verbatim cost strings and reasoning-effort tiers. Nullable catalog fields are pointers; `Variants` is a typed `ModelEffortVariants` (`Tiers`, or `Unknown` for the wire value `"unknown"`) and is the complete effort set, while `ReasoningEffortVariants` describes only labelled tiers; `Raw` preserves future fields and `Warnings` repeats the host's startup warnings. `ModelList` re-encodes with wire field names.
 - `Client.ListModels(ctx, HostOptions)` starts an owned host, lists the catalog and reaps the child before returning, including on error or cancellation. Set `HostOptions.Provider` to the provider the application will run.
 - `ModelSource*` constants for the open catalog-source vocabulary. An unknown source is returned as-is, not rejected.
 
 ### Compatibility and validation
 
-Protocol fixtures cover full and null-field rows, session-flagged active rows, an empty catalog, unknown sources, malformed catalogs, a host without `model/list` (remote error `-32601`), cancellation and child reaping. Against Muse Code 1.4.25 on macOS arm64, `Client.ListModels` returned the live provider catalog with its default row flagged, and all seven echo demos passed. Muse 1.4.25 reports a stable schema fingerprint different from the 1.4.14 baseline, so `StartMSP` still adds a fingerprint warning; Linux runtime evidence remains at 1.4.14. The API may change before v1.
+Protocol fixtures cover full and null-field rows, typed and `"unknown"` effort variants, an older host without `variants`, session-flagged active rows, an empty catalog, unknown sources, malformed catalogs, startup warnings, a host answering `-32601` for `model/list`, cancellation and child reaping. The `-32601` path is fixture-only. Against Muse Code 1.4.25 on macOS arm64, `Client.ListModels` returned the live provider catalog with its default row flagged, and all seven echo demos passed. Muse 1.4.25 reports a stable schema fingerprint different from the 1.4.14 baseline, so `StartMSP` still adds a fingerprint warning; Linux runtime evidence remains at 1.4.14. The API may change before v1.
 
 ## v0.1.0 — 2026-10-29
 

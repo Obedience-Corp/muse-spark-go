@@ -3,6 +3,7 @@ package muse
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // Model catalog sources reported by model/list. The set is open: an unknown
@@ -16,34 +17,68 @@ const (
 )
 
 // ModelList is one model/list snapshot, newest release first. Models may be
-// empty. Raw preserves future fields.
+// empty. Raw preserves future fields. Warnings repeats the host's startup
+// warnings, such as an untested schema fingerprint.
 type ModelList struct {
-	Models     []ModelCatalogEntry
-	ProviderID string
-	ProfileID  *string
-	Source     string
-	Raw        json.RawMessage
+	Models     []ModelCatalogEntry `json:"models"`
+	ProviderID string              `json:"providerId"`
+	ProfileID  *string             `json:"profileId"`
+	Source     string              `json:"source"`
+	Raw        json.RawMessage     `json:"-"`
+	Warnings   []string            `json:"-"`
 }
 
 // ModelCatalogEntry is one selectable catalog row. Pointer fields are nil when
 // the catalog declared nothing. IsDefault and IsActive may be false on every row.
 type ModelCatalogEntry struct {
-	ModelID                 string                 `json:"modelId"`
-	DisplayLabel            string                 `json:"displayLabel"`
-	ProviderID              string                 `json:"providerId"`
-	ProfileID               *string                `json:"profileId"`
-	IsDefault               bool                   `json:"isDefault"`
-	IsActive                bool                   `json:"isActive"`
-	Description             *string                `json:"description"`
-	ReleaseDate             *string                `json:"releaseDate"`
-	ContextLimit            *int64                 `json:"contextLimit"`
-	OutputLimit             *int64                 `json:"outputLimit"`
-	Cost                    *ModelCost             `json:"cost"`
-	DefaultReasoningEffort  string                 `json:"defaultReasoningEffort,omitempty"`
+	ModelID                string     `json:"modelId"`
+	DisplayLabel           string     `json:"displayLabel"`
+	ProviderID             string     `json:"providerId"`
+	ProfileID              *string    `json:"profileId"`
+	IsDefault              bool       `json:"isDefault"`
+	IsActive               bool       `json:"isActive"`
+	Description            *string    `json:"description"`
+	ReleaseDate            *string    `json:"releaseDate"`
+	ContextLimit           *int64     `json:"contextLimit"`
+	OutputLimit            *int64     `json:"outputLimit"`
+	Cost                   *ModelCost `json:"cost"`
+	DefaultReasoningEffort string     `json:"defaultReasoningEffort,omitempty"`
+	// ReasoningEffortVariants describes only the tiers the catalog labels: a
+	// same-order subset of Variants that may be empty. Use Variants for choices.
 	ReasoningEffortVariants []ModelReasoningEffort `json:"reasoningEffortVariants,omitempty"`
-	// Variants is the complete ordered effort set: a JSON array of tiers, or an
-	// explicit unknown-capability object. Older hosts omit it.
-	Variants json.RawMessage `json:"variants,omitempty"`
+	// Variants is the complete ordered set of selectable efforts. Nil when an
+	// older host omits it.
+	Variants *ModelEffortVariants `json:"variants,omitempty"`
+}
+
+// ModelEffortVariants is a row's complete ordered effort set. Unknown is true
+// when the host declares the capability unknown; Tiers is then empty.
+type ModelEffortVariants struct {
+	Tiers   []string
+	Unknown bool
+}
+
+func (v *ModelEffortVariants) UnmarshalJSON(b []byte) error {
+	if string(b) == `"unknown"` {
+		*v = ModelEffortVariants{Unknown: true}
+		return nil
+	}
+	var tiers []string
+	if err := json.Unmarshal(b, &tiers); err != nil {
+		return fmt.Errorf("effort variants are neither a tier array nor \"unknown\": %w", err)
+	}
+	*v = ModelEffortVariants{Tiers: tiers}
+	return nil
+}
+
+func (v ModelEffortVariants) MarshalJSON() ([]byte, error) {
+	if v.Unknown {
+		return []byte(`"unknown"`), nil
+	}
+	if v.Tiers == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(v.Tiers)
 }
 
 // ModelCost is the per-1M-token catalog cost, carried verbatim as decimal strings.
@@ -72,7 +107,12 @@ func (h *MSPHost) ListModels(ctx context.Context, sessionID string) (ModelList, 
 	if err := h.Call(ctx, "model/list", params, &raw); err != nil {
 		return ModelList{}, err
 	}
-	return decodeModelList(raw)
+	list, err := decodeModelList(raw)
+	if err != nil {
+		return ModelList{}, err
+	}
+	list.Warnings = append([]string(nil), h.Warnings...)
+	return list, nil
 }
 
 // ListModels starts an owned MSP host with o, reads its model catalog and
@@ -93,8 +133,9 @@ func (c *Client) listModels(ctx context.Context, o HostOptions) (ModelList, *MSP
 		h.abortStartup(err)
 		return ModelList{}, h, err
 	}
-	// The catalog is already read; a slow exit is not the caller's failure.
-	_ = h.Close(context.WithoutCancel(ctx))
+	// The catalog is already read. Close within ctx: an expired ctx kills and
+	// reaps the child, which is not the caller's failure.
+	_ = h.Close(ctx)
 	return list, h, nil
 }
 
